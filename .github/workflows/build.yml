@@ -1,0 +1,110 @@
+name: Build TWRP for m30s
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [twrp-12.1]
+    paths-ignore:
+      - README.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 340
+    env:
+      MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+      MANIFEST_BRANCH: twrp-12.1
+      DEVICE_PATH: device/samsung/m30s
+      LUNCH_TARGET: twrp_m30s-eng
+
+    steps:
+      - name: Free disk space
+        run: |
+          df -h / /mnt || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+            /usr/local/.ghcup /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/lib/node_modules /usr/local/julia* /opt/az /opt/microsoft
+          sudo docker image prune --all --force || true
+          sudo apt-get clean
+          df -h / /mnt || true
+
+      - name: Pick the work folder (the disk with more free space)
+        run: |
+          root_kb=$(df --output=avail -k / | tail -1)
+          mnt_kb=$(df --output=avail -k /mnt 2>/dev/null | tail -1 || echo 0)
+          if [ "${mnt_kb:-0}" -gt "$root_kb" ]; then W=/mnt/twrp; else W=$HOME/twrp; fi
+          sudo mkdir -p "$W" && sudo chown "$USER" "$W"
+          echo "WORK=$W" >> "$GITHUB_ENV"
+          echo "work folder: $W"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache cpio curl flex g++-multilib gcc-multilib \
+            git gnupg gperf imagemagick lib32z1-dev libc6-dev-i386 libelf-dev \
+            liblz4-tool libncurses5 libncurses5-dev libssl-dev libxml2 libxml2-utils \
+            lzop pngcrush python3 python-is-python3 rsync schedtool squashfs-tools \
+            unzip xsltproc zip zlib1g-dev
+          mkdir -p "$HOME/bin"
+          curl -sS https://storage.googleapis.com/git-repo-downloads/repo > "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Sync TWRP source
+        run: |
+          cd "$WORK"
+          git config --global user.name "builder"
+          git config --global user.email "builder@localhost"
+          git config --global color.ui false
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+          repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
+          df -h / /mnt || true
+
+      - name: Check out the device tree
+        uses: actions/checkout@v4
+        with:
+          path: tree
+
+      - name: Place the device tree
+        run: |
+          mkdir -p "$WORK/$(dirname "$DEVICE_PATH")"
+          rm -rf "$WORK/$DEVICE_PATH"
+          cp -r "$GITHUB_WORKSPACE/tree" "$WORK/$DEVICE_PATH"
+          rm -rf "$WORK/$DEVICE_PATH/.git" "$WORK/$DEVICE_PATH/.github"
+          ls -la "$WORK/$DEVICE_PATH"
+
+      - name: Build the recovery image
+        run: |
+          cd "$WORK"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          set +u
+          source build/envsetup.sh
+          lunch "$LUNCH_TARGET"
+          mka recoveryimage -j"$(nproc --all)"
+
+      - name: Package
+        run: |
+          cd "$WORK/out/target/product/m30s"
+          ls -la recovery.img
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp recovery.img "$GITHUB_WORKSPACE/artifact/"
+          # Odin flashes a .tar that contains recovery.img (AP slot)
+          tar -H ustar -c -f "$GITHUB_WORKSPACE/artifact/twrp-m30s-odin.tar" recovery.img
+          cd "$GITHUB_WORKSPACE/artifact"
+          sha256sum recovery.img twrp-m30s-odin.tar | tee sha256.txt
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m30s-${{ github.sha }}
+          path: artifact/
+          if-no-files-found: error
