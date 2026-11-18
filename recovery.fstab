@@ -4,7 +4,8 @@
 # specify MF_CHECK, and must come before any filesystems that do specify MF_CHECK
 
 # /data is f2fs on the M30s. The ext4 line is for a /data that was reformatted.
-# No encryption flags yet: this build does not decrypt.
-/dev/block/platform/13520000.ufs/by-name/userdata   /data   f2fs    noatime,nosuid,nodev,discard                                                                latemount,wait,check,reservedsize=128M
+# The f2fs line is the stock fstab.exynos9611 line (M307FXXU4CUI1), with its
+# file based encryption flag.
+/dev/block/platform/13520000.ufs/by-name/userdata   /data   f2fs    noatime,nosuid,nodev,discard,usrquota,grpquota,fsync_mode=nobarrier,reserve_root=32768,resgid=5678    wait,check,fileencryption=ice,quota,reservedsize=128M
 /dev/block/platform/13520000.ufs/by-name/userdata   /data   ext4    noatime,nosuid,nodev,noauto_da_alloc,discard,journal_checksum,data=ordered,errors=panic    latemount,wait,check,reservedsize=128M
 /dev/block/platform/13520000.ufs/by-name/misc       /misc   emmc    defaults                                                                                   defaults,first_stage_mount

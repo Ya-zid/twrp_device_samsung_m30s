@@ -16,8 +16,53 @@ data partition from recovery.
 
 ## State
 
+Branch `twrp-12.1`: the plain port, no decryption.
+Branch `twrp-12.1-decrypt`: the same plus the decryption attempt described below.
+
 - [ ] boots on a device
-- [ ] data decryption (not started in this tree: no crypto flags, no vendor files)
+- [ ] data decryption (written, builds, **never run on a device**)
+
+## Decryption (branch `twrp-12.1-decrypt`)
+
+Stock One UI on this phone uses file based encryption (`fileencryption=ice`,
+policy v1) with a keymaster 4.0 and a gatekeeper 1.0 HIDL HAL on top of
+Samsung's secure world (TEEGRIS). TWRP 12.1 can use exactly these two HALs,
+so its own decryption code is used unchanged.
+
+What is special here:
+
+- **No Samsung file is in the image.** At boot `m30s_tee.sh` mounts the
+  phone's vendor and system partitions read-only, copies `tzdaemon`, the
+  keymaster and gatekeeper services, the libraries they load and the trusted
+  apps (`/vendor/tee`) into the ramdisk, and unmounts again. The files always
+  match the installed firmware.
+- The daemons run as the same user and groups as in the stock firmware, and
+  `efs` is mounted at `/mnt/vendor/efs` like in a normal boot, because the
+  secure storage of the trusted apps lives in `/mnt/vendor/efs/tee`.
+- `patches/0001-*.patch` (applied to `bootable/recovery` by the workflow)
+  makes TWRP wait up to 60 seconds for `m30s.tee.ready` before it decrypts,
+  and skip decryption if the services did not come up. Without it TWRP would
+  hang on the splash screen forever in that case.
+- The image header must report the **same Android version and security patch
+  level as the installed firmware**, see the comment in `BoardConfig.mk`.
+  The default (2021-01-01) is deliberately too old: such a build cannot
+  decrypt and cannot change anything. Build with the phone's real values:
+  **Actions > Build TWRP for m30s > Run workflow**, branch
+  `twrp-12.1-decrypt`, inputs `os_version` and `security_patch`.
+
+Before testing it on a phone:
+
+- Copy everything important off the phone. This is experimental and touches
+  the same keys the system uses.
+- Make a backup of the EFS partition with the current TWRP first. This build
+  mounts efs read-write, as the system does.
+
+If decryption does not work, these files say why (pull them with adb or copy
+them to the SD card):
+
+- `/tmp/m30s_tee.log` : the bring-up of Samsung's services
+- `/tmp/recovery.log` : TWRP's own log
+- `logcat -d` : messages from tzdaemon, keymaster, gatekeeper, keystore2
 
 ## Sources
 
@@ -37,6 +82,9 @@ for the M30s.
 
 GitHub Actions builds it (`.github/workflows/build.yml`) and uploads
 `recovery.img` plus an Odin `.tar` as an artifact.
+
+The workflow also prints what the bootloader will read from the image header
+(`header.txt` in the artifact).
 
 By hand, with the
 [minimal TWRP manifest](https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp)

@@ -2,8 +2,17 @@ name: Build TWRP for m30s
 
 on:
   workflow_dispatch:
+    inputs:
+      os_version:
+        description: "Android version of the installed firmware (decrypt branch only), e.g. 11.0.0"
+        required: false
+        default: ""
+      security_patch:
+        description: "Security patch level of the installed firmware (decrypt branch only), e.g. 2021-10-01"
+        required: false
+        default: ""
   push:
-    branches: [twrp-12.1]
+    branches: [twrp-12.1, twrp-12.1-decrypt]
     paths-ignore:
       - README.md
 
@@ -82,6 +91,34 @@ jobs:
           rm -rf "$WORK/$DEVICE_PATH/.git" "$WORK/$DEVICE_PATH/.github"
           ls -la "$WORK/$DEVICE_PATH"
 
+      - name: Set the firmware version (decrypt branch, manual runs)
+        env:
+          IN_OS_VERSION: ${{ github.event.inputs.os_version }}
+          IN_SECURITY_PATCH: ${{ github.event.inputs.security_patch }}
+        run: |
+          f="$WORK/$DEVICE_PATH/BoardConfig.mk"
+          if grep -q '^M30S_SECURITY_PATCH :=' "$f"; then
+            if [ -n "$IN_OS_VERSION" ]; then
+              echo "$IN_OS_VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$' || { echo "bad os_version"; exit 1; }
+              sed -i "s/^M30S_OS_VERSION := .*/M30S_OS_VERSION := $IN_OS_VERSION/" "$f"
+            fi
+            if [ -n "$IN_SECURITY_PATCH" ]; then
+              echo "$IN_SECURITY_PATCH" | grep -Eq '^20[0-9]{2}-[01][0-9]-[0-3][0-9]$' || { echo "bad security_patch"; exit 1; }
+              sed -i "s/^M30S_SECURITY_PATCH := .*/M30S_SECURITY_PATCH := $IN_SECURITY_PATCH/" "$f"
+            fi
+            grep -E '^M30S_(OS_VERSION|SECURITY_PATCH) :=' "$f"
+          else
+            echo "this branch has no firmware version setting"
+          fi
+
+      - name: Apply the device tree's patches to bootable/recovery
+        run: |
+          shopt -s nullglob
+          for p in "$GITHUB_WORKSPACE"/tree/patches/*.patch; do
+            echo "applying $(basename "$p")"
+            patch -d "$WORK/bootable/recovery" -p1 --forward < "$p"
+          done
+
       - name: Build the recovery image
         run: |
           cd "$WORK"
@@ -101,6 +138,22 @@ jobs:
           tar -H ustar -c -f "$GITHUB_WORKSPACE/artifact/twrp-m30s-odin.tar" recovery.img
           cd "$GITHUB_WORKSPACE/artifact"
           sha256sum recovery.img twrp-m30s-odin.tar | tee sha256.txt
+          # what the bootloader will read from the image header
+          python3 - recovery.img <<'PY' | tee header.txt
+          import struct, sys
+          d = open(sys.argv[1], 'rb').read(1700)
+          assert d[:8] == b'ANDROID!', 'not a boot image'
+          ksz, kaddr, rsz, raddr, ssz, saddr, tags, page, hdrver, osv = struct.unpack('<10I', d[8:48])
+          a, b, c = (osv >> 25) & 0x7f, (osv >> 18) & 0x7f, (osv >> 11) & 0x7f
+          y, m = ((osv >> 4) & 0x7f) + 2000, osv & 0xf
+          print('header version :', hdrver)
+          print('kernel size    :', ksz)
+          print('ramdisk size   :', rsz)
+          print('os version     : %d.%d.%d' % (a, b, c))
+          print('os patch level : %04d-%02d' % (y, m))
+          print('board name     :', d[48:64].split(b'\0')[0].decode(errors='replace'))
+          print('cmdline        :', d[64:576].split(b'\0')[0].decode(errors='replace'))
+          PY
 
       - name: Upload
         uses: actions/upload-artifact@v4

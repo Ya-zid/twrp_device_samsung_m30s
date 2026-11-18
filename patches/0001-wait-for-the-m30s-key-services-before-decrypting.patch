@@ -1,0 +1,36 @@
+From: m30s device tree
+Subject: [PATCH] partition: wait for the m30s key services before decrypting
+
+Applied to bootable/recovery by the build workflow of the m30s device tree.
+TWRP would otherwise try to decrypt before the keymaster HAL, which is copied
+from the vendor partition at boot, is up; and it would wait forever for
+keystore2 if that HAL never comes up.
+---
+--- a/partition.cpp	2026-11-18 01:17:52.135838740 +0100
++++ b/partition.cpp	2026-11-18 01:17:52.147838596 +0100
+@@ -803,6 +803,25 @@
+ 	ExcludeAll(Mount_Point + "/per_boot"); // removed each boot by init
+ 	ExcludeAll(Mount_Point + "/gsi"); // cow devices
+ 
++	// m30s: the keymaster and gatekeeper services are not in this image. They are
++	// taken from the phone's vendor partition at boot by /system/bin/m30s_tee.sh,
++	// which reports through m30s.tee.ready ("1" ready, "0" failed). Wait for the
++	// verdict, 60 seconds at most, and leave the data encrypted if it is not "1".
++	{
++		std::string tee_ready;
++		int waited = 0;
++		while ((tee_ready = android::base::GetProperty("m30s.tee.ready", "")).empty() && waited < 600) {
++			usleep(100000);
++			waited++;
++		}
++		LOGINFO("m30s.tee.ready='%s' after %d ms\n", tee_ready.c_str(), waited * 100);
++		if (tee_ready != "1") {
++			LOGERR("Samsung key services did not start (see /tmp/m30s_tee.log). Data stays encrypted.\n");
++			DataManager::SetValue(TW_IS_FBE, 0);
++			return false;
++		}
++	}
++
+ 	int retry_count = 3;
+ 	while (!android::keystore::Decrypt_DE() && --retry_count)
+ 		usleep(2000);

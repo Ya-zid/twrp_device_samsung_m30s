@@ -45,13 +45,38 @@ BOARD_KERNEL_CMDLINE := \
     androidboot.hardware=exynos9611 \
     androidboot.selinux=permissive
 
+# Platform version = what the INSTALLED FIRMWARE reports.
+#
+# The bootloader hands the OS version and patch level from this image's header
+# to the secure world, and keymaster compares them with the values stored in
+# every key:
+#   same               the key is used as it is
+#   recovery is older  keymaster refuses the key (decryption fails, nothing changes)
+#   recovery is newer  keymaster asks for a key upgrade. TWRP keeps upgraded keys
+#                      in RAM only, but whether Samsung's keymaster then still
+#                      accepts the old key is not known. Avoid this case.
+# So the default below is older than any Android 11 firmware of the M30s: a build
+# with the default cannot decrypt, and cannot do harm. Set the two values to
+#   getprop ro.build.version.release          (11)
+#   getprop ro.build.version.security_patch   (for example 2021-10-01)
+# of the phone. The GitHub workflow has inputs for them.
+M30S_OS_VERSION := 11.0.0
+M30S_SECURITY_PATCH := 2021-01-01
+
+PLATFORM_VERSION := 11
+PLATFORM_VERSION_LAST_STABLE := $(PLATFORM_VERSION)
+PLATFORM_SECURITY_PATCH := $(M30S_SECURITY_PATCH)
+BOOT_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
+VENDOR_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
+
 # Boot image header (same values as the official android-9.0 m30s tree)
 BOARD_MKBOOTIMG_ARGS := \
     --base 0x10000000 \
     --kernel_offset 0x00008000 \
     --pagesize 2048 \
     --ramdisk_offset 0x01000000 \
-    --os_version 14.0.0 \
+    --os_version $(M30S_OS_VERSION) \
+    --os_patch_level $(M30S_SECURITY_PATCH) \
     --tags_offset 0x00000100 \
     --header_version 1 \
     --board SRPSE30A002RU
@@ -82,14 +107,6 @@ $(foreach p, $(BOARD_PARTITION_LIST), $(eval TARGET_COPY_OUT_$(p) := $(call to-l
 # Android Verified Boot
 BOARD_AVB_ENABLE := false
 
-# Platform version
-# No decryption yet, so these only have to be "newer than anything".
-PLATFORM_VERSION := 99.87.36
-PLATFORM_VERSION_LAST_STABLE := $(PLATFORM_VERSION)
-PLATFORM_SECURITY_PATCH := 2099-12-31
-BOOT_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
-VENDOR_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
-
 # Recovery
 TARGET_RECOVERY_PIXEL_FORMAT := ABGR_8888
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery.fstab
@@ -114,6 +131,13 @@ TW_INCLUDE_NTFS_3G := true
 TW_INCLUDE_LIBRESETPROP := true
 TW_INCLUDE_RESETPROP := true
 TW_INCLUDE_REPACKTOOLS := true
+
+# Decryption (file based encryption, policy v1, "ice" contents mode)
+# The keymaster / gatekeeper HALs are copied from the vendor partition at boot,
+# see recovery/root/system/bin/m30s_tee.sh.
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_USE_FSCRYPT_POLICY := 1
 
 # Debug
 TWRP_INCLUDE_LOGCAT := true
